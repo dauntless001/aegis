@@ -1,15 +1,39 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+from app.core.database import db
+from app.core.logging import setup_logging, get_logger
+from app.core.exceptions import (
+    AppException, ValidationError
+)
+from app.core.exception_handlers import (
+    http_exception_handler,
+    app_exception_handler,
+    general_exception_handler,
+    pydantic_validation_exception_handler,
+    validation_exception_handler,
+    value_error_handler
+)
 from contextlib import asynccontextmanager
+
+
+# setup loggin
+setup_logging()
+logger = get_logger("main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup
-    yield
-
-    # Shutdown
+    logger.info("Application Starting...")
+    await db.connect()
+    try:
+        logger.info("Database connection established")
+        yield
+    finally:
+        await db.disconnect()
+        logger.info("Database connection closed")
 
 
 app = FastAPI(
@@ -30,7 +54,12 @@ app.add_middleware(
 )
 
 # Register exceptions here
-
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(AppException, app_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
+app.add_exception_handler(ValidationError, pydantic_validation_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(ValueError, value_error_handler)
 
 # Include Routers
 
@@ -39,3 +68,25 @@ app.add_middleware(
 async def root():
     """Root endpoint."""
     return {"message": "Aegis API", "version": "0.1.0"}
+
+
+@app.get("/health", tags=["health"])
+async def health_check():
+    """Check application and database health"""
+    db_status = "disconnected"
+    try:
+        db_connected = await db.check_connection()
+        if db_connected:
+            db_status = "connected"
+    except Exception:
+        logger.exception("Database connection failed")
+        pass
+
+    overall_status = (
+        "healthy" if db_status == "connected" else "degraded"
+    )
+    return {
+        "status": overall_status,
+        "database": db_status, 
+        "version": "0.1.0"
+    }

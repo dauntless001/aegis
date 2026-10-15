@@ -4,9 +4,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Aegis API"
     admin_email: str = "noreply@aegis.com"
-    debug: bool = False
-    port: str = "8000"
     cors_origins_list: list = []
+    database_url: str
+    debug: bool = False
+    log_level: str = "INFO"
+    log_format: str = (
+        "%(asctime)s - %(funcName)s() - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+    )
+    log_date_format: str = "%Y-%m-%d %H:%M:%S"
+    port: str = "8000"
+
 
     model_config = SettingsConfigDict(
         env_file=".env",
