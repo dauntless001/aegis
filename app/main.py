@@ -7,6 +7,8 @@ from app.core.logging import setup_logging, get_logger
 from app.core.exceptions import (
     AppException, ValidationError
 )
+from app.api.v1.router import api_router as v1_api_router
+
 from app.core.exception_handlers import (
     http_exception_handler,
     app_exception_handler,
@@ -62,7 +64,7 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(ValueError, value_error_handler)
 
 # Include Routers
-
+app.include_router(v1_api_router, prefix="/api/v1")
 
 @app.get("/", tags=["health"])
 async def root():
