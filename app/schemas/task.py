@@ -25,7 +25,7 @@ class TaskResponse(BaseModel):
     scheduled_at: datetime | None = None
     attempts: int
     max_attempts: int
-    results: Any | None = None
+    result: Any | None = None
     last_error: str | None = None
     created_at: datetime
     updated_at: datetime
