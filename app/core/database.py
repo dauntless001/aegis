@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-
+from collections.abc import AsyncGenerator
 from app.core.config import settings
 from app.core.logging import get_logger
 
@@ -91,7 +91,12 @@ class Database:
 db = Database()
 
 
-async def get_database():
+async def get_database() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency for database sessions."""
-    async for session in db.get_session():
+    if db.session_factory is None:
+        raise RuntimeError(
+            "Database not initialized. Call connect() first."
+        )
+
+    async with db.session_factory() as session:
         yield session
