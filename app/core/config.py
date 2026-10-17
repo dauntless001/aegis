@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     cors_origins_list: list = []
     database_url: str
     debug: bool = False
+    default_idempotency_scope: str = "development"
     log_level: str = "INFO"
     log_format: str = (
         "%(asctime)s - %(funcName)s() - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
