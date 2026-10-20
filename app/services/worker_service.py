@@ -1,14 +1,16 @@
+import asyncio
 from uuid import UUID, uuid4
 from datetime import datetime, timezone, timedelta
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.models.task import Task, TaskAttempt
 from app.utils.enums import TaskStatus
 from sqlalchemy import select
 from typing import Any
 
 class WorkerService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, session_factory: async_sessionmaker[AsyncSession] | None = None,):
         self.db = db
+        self.session_factory = session_factory
 
 
     async def claim_task(
@@ -160,6 +162,15 @@ class WorkerService:
                 f"Claimed task {task.id} has no lease token"
             )
 
+        heartbeat_task = asyncio.create_task(
+            self.heartbeat(
+                task_id=task_id,
+                lease_token=lease_token,
+                lease_seconds=60,
+                heartbeat_interval=20
+            )
+        )
+
         try:
             handler = task_registry.get(task_name)
             result = await handler(payload)
@@ -172,6 +183,13 @@ class WorkerService:
                 task_id=task_id, lease_token=lease_token, error=error
             )
             return
+
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
         completed = await self.complete_task(
             task_id=task_id, lease_token=lease_token,
@@ -245,6 +263,53 @@ class WorkerService:
                 recovered_count += 1
 
         return recovered_count
+
+    async def renew_lease(
+            self, task_id: UUID, lease_token: UUID, lease_seconds: int = 60
+        ) -> bool:
+
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be greater by 0")
+
+        now = datetime(timezone.utc)
+
+        async with self.db.begin():
+            task = await self.db.scalar(
+                select(Task).where(
+                    Task.id == task_id,
+                    Task.status == TaskStatus.RUNNING,
+                    Task.lease_token == lease_token,
+                    Task.locked_until > now
+                ).with_for_update()
+            )
+
+            if task is None:
+                return False
+
+            task.locked_until = now + timedelta(seconds=lease_seconds)
+
+        return True
+
+    async def heartbeat(
+            self, task_id: UUID, lease_token: UUID, lease_seconds: int = 60,
+            heartbeat_interval: int = 20
+        ) -> None:
+
+        if self.session_factory is None:
+            raise RuntimeError("A session factory is required for heartbeats")
+        while True:
+            await asyncio.sleep(heartbeat_interval)
+
+            renewed = await self.renew_lease(
+                task_id=task_id, 
+                lease_token=lease_token, 
+                lease_seconds=lease_seconds
+            )
+
+            if not renewed:
+                # The lease was lost, expired or replaced
+                return
+
 
 
             

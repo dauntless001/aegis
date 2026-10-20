@@ -34,7 +34,10 @@ async def run_worker() -> None:
             try:
                 # Use a fresh session for each polling iteration.
                 async with db.session_factory() as session:
-                    service = WorkerService(session)
+                    service = WorkerService(
+                        session,
+                        session_factory=db.session_factory
+                    )
 
                     recovered_count = await service.recover_expired_tasks()
 
@@ -56,6 +59,11 @@ async def run_worker() -> None:
                             task.id,
                             task.name,
                             task.attempts,
+                        )
+                        renewed = await service.renew_lease(
+                            task_id=task.id,
+                            lease_token=task.lease_token,
+                            lease_seconds=60,
                         )
 
                         await service.execute_task(task)
