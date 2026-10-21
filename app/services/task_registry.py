@@ -20,7 +20,7 @@ class TaskRegistry:
         handler = self._handlers.get(name)
 
         if handler is None:
-            raise ValueError("No handler registered for task: {name}")
+            raise ValueError(f"No handler registered for task: {name}")
 
         return handler
 

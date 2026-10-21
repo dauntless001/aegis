@@ -171,9 +171,40 @@ class WorkerService:
             )
         )
 
+        handler_task = asyncio.create_task(
+            self._run_handler(task_name, payload)
+        )
+
         try:
-            handler = task_registry.get(task_name)
-            result = await handler(payload)
+            done, _ = await asyncio.wait(
+                {heartbeat_task, handler_task},
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if heartbeat_task in done and not handler_task.done():
+                handler_task.cancel()
+                await asyncio.gather(
+                    handler_task, return_exceptions=True
+                )
+
+                raise RuntimeError(f"Lease lost while executing task {task_id}")
+            
+            # handler = task_registry.get(task_name)
+            result = await handler_task
+            completed = await self.complete_task(
+                task_id=task_id, lease_token=lease_token,
+                result=result
+            )
+    
+            if not completed:
+                raise RuntimeError(
+                    f"Could not complete task {task_id}: "
+                    "task state or lease token no longer matches"
+                )
+
+        except asyncio.CancelledError:
+            handler_task.cancel()
+            return
 
         except Exception as exec:
 
@@ -182,26 +213,24 @@ class WorkerService:
             await self.fail_task(
                 task_id=task_id, lease_token=lease_token, error=error
             )
-            return
+            raise
 
         finally:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
+            for background_task in (heartbeat_task, handler_task):
+                if not background_task.done():
+                    background_task.cancel()
+            # heartbeat_task.cancel()
+            # try:
+            #     await heartbeat_task
+            # except asyncio.CancelledError:
+            #     pass
+            await asyncio.gather(heartbeat_task, handler_task, return_exceptions=True)
 
-        completed = await self.complete_task(
-            task_id=task_id, lease_token=lease_token,
-            result=result
-        )
+    async def _run_handler(self, task_name: str, payload: dict[str, Any]) -> Any:
+        from app.services.task_registry import task_registry
 
-        if not completed:
-            raise RuntimeError(
-                f"Could not complete task {task_id}: "
-                "task state or lease token no longer matches"
-            )
-
+        handler = task_registry.get(task_name)
+        return await handler(payload)
 
     
     async def recover_expired_tasks(self, limit: int = 100) -> int:
@@ -271,7 +300,7 @@ class WorkerService:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be greater by 0")
 
-        now = datetime(timezone.utc)
+        now = datetime.now(timezone.utc)
 
         async with self.db.begin():
             task = await self.db.scalar(
@@ -297,14 +326,19 @@ class WorkerService:
 
         if self.session_factory is None:
             raise RuntimeError("A session factory is required for heartbeats")
+
+        
         while True:
             await asyncio.sleep(heartbeat_interval)
 
-            renewed = await self.renew_lease(
-                task_id=task_id, 
-                lease_token=lease_token, 
-                lease_seconds=lease_seconds
-            )
+            async with self.session_factory() as session:
+                service = WorkerService(session)
+
+                renewed = await self.renew_lease(
+                    task_id=task_id, 
+                    lease_token=lease_token, 
+                    lease_seconds=lease_seconds
+                )
 
             if not renewed:
                 # The lease was lost, expired or replaced
