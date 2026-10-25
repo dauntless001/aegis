@@ -196,14 +196,14 @@ class WorkerService:
             if heartbeat_task in done:
                 try:
                     heartbeat_task.result()
-                except Exception as exec:
+                except Exception as exc:
                     handler_task.cancel()
                     await asyncio.gather(
                         handler_task, return_exceptions=True
                     )
                     raise RuntimeError(
                         f"Heartbeat failed for task {task_id}"
-                    ) from exec
+                    ) from exc
 
             
                 handler_task.cancel()
@@ -221,8 +221,8 @@ class WorkerService:
             # handler = task_registry.get(task_name)
             try:
                 result = handler_task.result()
-            except Exception as exec:
-                error = f"{type(exec).__name__}: {exec}"
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
                 recorded = await self.fail_task(
                     task_id=task_id, lease_token=lease_token, error=error
                 )
@@ -231,7 +231,7 @@ class WorkerService:
                     raise RuntimeError(
                         f"Could not record failure for task {task_id}: "
                         "the lease may have been lost"
-                    ) from exec
+                    ) from exc
                 
                 return
 

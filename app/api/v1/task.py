@@ -99,17 +99,17 @@ async def create_task(
                 extra={"task": task}
             )
         return task
-    except ValueError as exec:
+    except ValueError as exc:
         logger.warning(
             "Task Submission rejected",
             extra={
                 "data": data,
-                "reason": str(exec)
+                "reason": str(exc)
             }
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(exec)
+            detail=str(exc)
         )
 
     except Exception:
@@ -135,10 +135,10 @@ async def cancel_task(
 
     try:
         task = await service.cancel_task(task_id=task_id)
-    except ValueError as exec:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(exec)
+            detail=str(exc)
         )
 
     if task is None:
@@ -162,10 +162,10 @@ async def cancel_task(
 
     try:
         task = await service.retry_task(task_id=task_id)
-    except ValueError as exec:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(exec)
+            detail=str(exc)
         )
 
     if task is None:

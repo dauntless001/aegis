@@ -11,22 +11,22 @@ logger = get_logger("exception_handlers")
 
 
 def http_exception_handler(
-        request: Request, exec: HTTPException  
+        request: Request, exc: HTTPException  
     ) -> JSONResponse:
 
     """
     Args:
         request : Fastapi request
-        exec: Fastapi http exception
+        exc: Fastapi http exception
     
     Returns:
         JSON response in DRF format {"detail" : "error message"}
     """
 
     logger.warning(
-        f"HTTP Error: {exec.detail}",
+        f"HTTP Error: {exc.detail}",
         extra={
-           "status_code" : exec.status_code,
+           "status_code" : exc.status_code,
             "path": request.url.path,
             "method": request.method
         },
@@ -34,27 +34,27 @@ def http_exception_handler(
     )
 
     return JSONResponse(
-        status_code= exec.status_code,
-        content={"detail" : exec.detail},
-        headers=exec.headers
+        status_code= exc.status_code,
+        content={"detail" : exc.detail},
+        headers=exc.headers
     )
 
 def app_exception_handler(
-        request: Request, exec: AppException
+        request: Request, exc: AppException
     ) -> JSONResponse:
     """
     Args:
         request: FastAPI request
-        exec: Application exception
+        exc: Application exception
 
     Returns:
         JSON response in DRF format {"detail" : "error message"}
     """
 
     logger.warning(
-        f"Application Error: {exec.detail}",
+        f"Application Error: {exc.detail}",
         extra={
-            "status_code" : exec.status_code,
+            "status_code" : exc.status_code,
             "path": request.url.path,
             "method": request.method
         },
@@ -62,8 +62,8 @@ def app_exception_handler(
     )
     
     return JSONResponse(
-        status_code= exec.status_code,
-        content={"detail" : exec.message or exec.detail}
+        status_code= exc.status_code,
+        content={"detail" : exc.message or exc.detail}
     )
 
 def _serialize_value(value: Any) -> Any:
