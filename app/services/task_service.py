@@ -148,10 +148,8 @@ class TaskService:
                 raise ValueError(f"Cannot cancel task with status {task.status.value}")
 
             if task.status is TaskStatus.RUNNING:
-                """
-                TODO -> Implement a worked-cordinated cancellation for running tasks
-                """
-                raise ValueError(f"Cannot cancel a running task yet; worker-cordinated cancellation not implemented")
+                task.cancel_requested = True
+                return task
 
             now = datetime.now(timezone.utc)
 

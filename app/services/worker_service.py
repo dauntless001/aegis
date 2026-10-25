@@ -91,6 +91,19 @@ class WorkerService:
                     f"Running attempt not found for task {task_id}"
                 )
 
+            if task.cancel_requested:
+                attempt.status = TaskStatus.CANCELLED
+                attempt.error = "Task cancelled by request"
+                attempt.finished_at = now
+
+                task.status = TaskStatus.CANCELLED
+                task.completed_at = now
+                task.locked_until = None
+                task.locked_by = None
+                task.lease_token = None
+
+                return True
+
             task.status = TaskStatus.SUCCEEDED
             task.result = result
             task.last_error = None
@@ -137,6 +150,19 @@ class WorkerService:
                 raise RuntimeError(
                     f"Running attempt not found for task {task.id}"
                 )
+
+            if task.cancel_requested:
+                attempt.status = TaskStatus.CANCELLED
+                attempt.error = "Task cancelled by request"
+                attempt.finished_at = now
+
+                task.status = TaskStatus.CANCELLED
+                task.completed_at = now
+                task.locked_until = None
+                task.locked_by = None
+                task.lease_token = None
+
+                return True
 
             attempt.status = TaskStatus.FAILED
             attempt.error = error
@@ -195,36 +221,71 @@ class WorkerService:
 
             if heartbeat_task in done:
                 try:
-                    heartbeat_task.result()
+                    signal = heartbeat_task.result()
+
+                except asyncio.CancelledError:
+                    raise
+
                 except Exception as exc:
+                    # The heartbeat failed. Stop the handler before handling the error.
                     handler_task.cancel()
-                    await asyncio.gather(
-                        handler_task, return_exceptions=True
+                    await asyncio.gather(handler_task, return_exceptions=True)
+
+                    error = f"{type(exc).__name__}: {exc}"
+                    recorded = await self.fail_task(
+                        task_id=task_id,
+                        lease_token=lease_token,
+                        error=error,
                     )
-                    raise RuntimeError(
-                        f"Heartbeat failed for task {task_id}"
-                    ) from exc
 
-            
+                    if not recorded:
+                        raise RuntimeError(
+                            f"Could not record failure for task {task_id}: "
+                            "the lease may have been lost"
+                        ) from exc
+
+                    return
+
+                # The heartbeat has stopped, so stop the handler too.
                 handler_task.cancel()
-                await asyncio.gather(
-                    handler_task, return_exceptions=True
-                )
-                raise RuntimeError(
-                    f"Lease lost while executing task {task_id}"
-                )
+                await asyncio.gather(handler_task, return_exceptions=True)
 
-            handler_task.cancel()
-            await asyncio.gather(
-                handler_task, return_exceptions=True
-            )
-            # handler = task_registry.get(task_name)
+                if signal == "cancel_requested":
+                    cancelled = await self.cancel_running_task(
+                        task_id=task_id,
+                        lease_token=lease_token,
+                    )
+
+                    if not cancelled:
+                        raise RuntimeError(
+                            f"Could not finalize cancellation for task {task_id}"
+                        )
+
+                    return
+
+                if signal == "lease_lost":
+                    raise RuntimeError(
+                        f"Lease lost while executing task {task_id}"
+                    )
+
+                raise RuntimeError(
+                    f"Unexpected heartbeat signal for task {task_id}: {signal!r}"
+                )
+            
+
             try:
                 result = handler_task.result()
+
+            except asyncio.CancelledError:
+                raise
+
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
+
                 recorded = await self.fail_task(
-                    task_id=task_id, lease_token=lease_token, error=error
+                    task_id=task_id,
+                    lease_token=lease_token,
+                    error=error,
                 )
 
                 if not recorded:
@@ -232,14 +293,15 @@ class WorkerService:
                         f"Could not record failure for task {task_id}: "
                         "the lease may have been lost"
                     ) from exc
-                
+
                 return
 
             completed = await self.complete_task(
-                task_id=task_id, lease_token=lease_token,
-                result=result
+                task_id=task_id,
+                lease_token=lease_token,
+                result=result,
             )
-    
+
             if not completed:
                 raise RuntimeError(
                     f"Could not complete task {task_id}: "
@@ -349,7 +411,7 @@ class WorkerService:
     async def heartbeat(
             self, task_id: UUID, lease_token: UUID, lease_seconds: int = 60,
             heartbeat_interval: int = 20
-        ) -> None:
+        ) -> str:
 
         if self.session_factory is None:
             raise RuntimeError("A session factory is required for heartbeats")
@@ -362,18 +424,71 @@ class WorkerService:
             await asyncio.sleep(heartbeat_interval)
 
             async with self.session_factory() as session:
-                heartbeat_service = WorkerService(session)
+                async with session.begin():
+                    now = datetime.now(timezone.utc)
 
-                renewed = await heartbeat_service.renew_lease(
-                    task_id=task_id, 
-                    lease_token=lease_token, 
-                    lease_seconds=lease_seconds
-                )
+                    task = await session.scalar(
+                        select(Task).where(
+                            Task.id == task_id
+                        ).with_for_update()
+                    )
 
-            if not renewed:
-                # The lease was lost, expired or replaced
-                return
+                    if (
+                        task is None 
+                        or task.status != TaskStatus.RUNNING 
+                        or task.lease_token != lease_token 
+                        or task.locked_until is None 
+                        or task.locked_until <= now):
+                        return "lease_lost"
+
+                    if task.cancel_requested:
+                        return "cancel_requested"
+
+                    task.locked_until = now + timedelta(seconds=lease_seconds)
 
 
+    async def cancel_running_task(
+            self, task_id : UUID, lease_token: UUID
+    )-> bool:
+        now = datetime.now(timezone.utc)
 
-            
+        async with self.db.begin():
+            task = await self.db.scalar(
+                select(Task).where(
+                    Task.id == task_id
+                ).with_for_update()
+            )
+
+            if (
+                task is None 
+                or task.status != TaskStatus.RUNNING 
+                or task.lease_token != lease_token 
+                or not task.cancel_requested
+            ):
+                return False
+
+            attempt = await self.db.scalar(
+                select(TaskAttempt).where(
+                    TaskAttempt.task_id == task.id,
+                    TaskAttempt.attempt_number == task.attempts,
+                    TaskAttempt.status == TaskStatus.RUNNING
+                ).with_for_update()
+            )
+
+            if attempt is None:
+                raise RuntimeError(f"Running attempt not found for task {task_id}")
+
+            attempt.status = TaskStatus.CANCELLED
+            attempt.error = "Task cancelled by request"
+            attempt.finished_at = now
+
+            task.status = TaskStatus.CANCELLED
+            task.completed_at = now
+            task.last_error = None
+
+
+            task.locked_by = None
+            task.locked_until = None
+            task.lease_token = None
+
+        return True

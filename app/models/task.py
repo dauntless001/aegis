@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 from app.models.base import Base
 from sqlalchemy import (
-    CheckConstraint, DateTime, Enum, ForeignKey, func, 
+    Boolean, CheckConstraint, DateTime, Enum, ForeignKey, func, 
     Index, Integer, String, Text, text, UniqueConstraint, Uuid, 
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -131,6 +131,13 @@ class Task(Base):
         uselist=False,
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False
     )
 
 
