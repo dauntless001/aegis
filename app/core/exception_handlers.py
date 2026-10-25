@@ -35,7 +35,8 @@ def http_exception_handler(
 
     return JSONResponse(
         status_code= exec.status_code,
-        content={"detail" : exec.message or exec.detail}
+        content={"detail" : exec.detail},
+        headers=exec.headers
     )
 
 def app_exception_handler(

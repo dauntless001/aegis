@@ -136,15 +136,15 @@ async def cancel_task(
     try:
         task = await service.cancel_task(task_id=task_id)
     except ValueError as exec:
-        return HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            details=str(exec)
+            detail=str(exec)
         )
 
     if task is None:
-        return HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            details="Task not found"
+            detail="Task not found"
         )
 
     return task
@@ -163,15 +163,15 @@ async def cancel_task(
     try:
         task = await service.retry_task(task_id=task_id)
     except ValueError as exec:
-        return HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            details=str(exec)
+            detail=str(exec)
         )
 
     if task is None:
-        return HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            details="Task not found"
+            detail="Task not found"
         )
 
     return task
