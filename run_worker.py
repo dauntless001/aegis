@@ -6,7 +6,7 @@ import socket
 from app.core.database import db
 from app.services.worker_service import WorkerService
 from app.services.task_registry import task_registry
-from app.services.handlers import add_numbers
+from app.services.handlers import add_numbers, slow_task
 
 
 logging.basicConfig(
@@ -25,6 +25,7 @@ async def run_worker() -> None:
 
     # Register supported task handlers once at startup.
     task_registry.register("add_numbers", add_numbers)
+    task_registry.register("slow_task", slow_task)
 
     await db.connect()
     logger.info("Worker %s started", worker_id)
@@ -60,11 +61,11 @@ async def run_worker() -> None:
                             task.name,
                             task.attempts,
                         )
-                        renewed = await service.renew_lease(
-                            task_id=task.id,
-                            lease_token=task.lease_token,
-                            lease_seconds=60,
-                        )
+                        # renewed = await service.renew_lease(
+                        #     task_id=task.id,
+                        #     lease_token=task.lease_token,
+                        #     lease_seconds=60,
+                        # )
 
                         await service.execute_task(task)
 

@@ -69,7 +69,13 @@ class WorkerService:
                 select(Task).where(Task.id == task_id).with_for_update()
             )
 
-            if task is None or task.status != TaskStatus.RUNNING or task.lease_token != lease_token:
+            if (
+                task is None 
+                or task.status != TaskStatus.RUNNING 
+                or task.lease_token != lease_token
+                or task.locked_until is None 
+                or task.locked_until <= now
+                ):
                 return False
 
             attempt = await self.db.scalar(
@@ -110,7 +116,13 @@ class WorkerService:
                 ).with_for_update()
             )
 
-            if task is None or task.status != TaskStatus.RUNNING or task.lease_token != lease_token:
+            if (
+                task is None 
+                or task.status != TaskStatus.RUNNING 
+                or task.lease_token != lease_token
+                or task.locked_until is None 
+                or task.locked_until <= now
+                ):
                 return False
 
             attempt = await self.db.scalar(
@@ -162,6 +174,10 @@ class WorkerService:
                 f"Claimed task {task.id} has no lease token"
             )
 
+        handler_task = asyncio.create_task(
+            self._run_handler(task_name, payload)
+        )
+
         heartbeat_task = asyncio.create_task(
             self.heartbeat(
                 task_id=task_id,
@@ -171,26 +187,54 @@ class WorkerService:
             )
         )
 
-        handler_task = asyncio.create_task(
-            self._run_handler(task_name, payload)
-        )
-
         try:
             done, _ = await asyncio.wait(
                 {heartbeat_task, handler_task},
                 return_when=asyncio.FIRST_COMPLETED
             )
 
-            if heartbeat_task in done and not handler_task.done():
+            if heartbeat_task in done:
+                try:
+                    heartbeat_task.result()
+                except Exception as exec:
+                    handler_task.cancel()
+                    await asyncio.gather(
+                        handler_task, return_exceptions=True
+                    )
+                    raise RuntimeError(
+                        f"Heartbeat failed for task {task_id}"
+                    ) from exec
+
+            
                 handler_task.cancel()
                 await asyncio.gather(
                     handler_task, return_exceptions=True
                 )
+                raise RuntimeError(
+                    f"Lease lost while executing task {task_id}"
+                )
 
-                raise RuntimeError(f"Lease lost while executing task {task_id}")
-            
+            handler_task.cancel()
+            await asyncio.gather(
+                handler_task, return_exceptions=True
+            )
             # handler = task_registry.get(task_name)
-            result = await handler_task
+            try:
+                result = handler_task.result()
+            except Exception as exec:
+                error = f"{type(exec).__name__}: {exec}"
+                recorded = await self.fail_task(
+                    task_id=task_id, lease_token=lease_token, error=error
+                )
+
+                if not recorded:
+                    raise RuntimeError(
+                        f"Could not record failure for task {task_id}: "
+                        "the lease may have been lost"
+                    ) from exec
+                
+                return
+
             completed = await self.complete_task(
                 task_id=task_id, lease_token=lease_token,
                 result=result
@@ -202,28 +246,11 @@ class WorkerService:
                     "task state or lease token no longer matches"
                 )
 
-        except asyncio.CancelledError:
-            handler_task.cancel()
-            return
-
-        except Exception as exec:
-
-            error = f"{type(exec).__name__}: {exec}"
-
-            await self.fail_task(
-                task_id=task_id, lease_token=lease_token, error=error
-            )
-            raise
-
         finally:
             for background_task in (heartbeat_task, handler_task):
                 if not background_task.done():
                     background_task.cancel()
-            # heartbeat_task.cancel()
-            # try:
-            #     await heartbeat_task
-            # except asyncio.CancelledError:
-            #     pass
+
             await asyncio.gather(heartbeat_task, handler_task, return_exceptions=True)
 
     async def _run_handler(self, task_name: str, payload: dict[str, Any]) -> Any:
@@ -327,14 +354,17 @@ class WorkerService:
         if self.session_factory is None:
             raise RuntimeError("A session factory is required for heartbeats")
 
+        if heartbeat_interval <=0:
+            raise ValueError("heartbeat_interval must be greater than 0")
+
         
         while True:
             await asyncio.sleep(heartbeat_interval)
 
             async with self.session_factory() as session:
-                service = WorkerService(session)
+                heartbeat_service = WorkerService(session)
 
-                renewed = await self.renew_lease(
+                renewed = await heartbeat_service.renew_lease(
                     task_id=task_id, 
                     lease_token=lease_token, 
                     lease_seconds=lease_seconds
