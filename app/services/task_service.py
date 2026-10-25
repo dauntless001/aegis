@@ -1,4 +1,5 @@
 import json, hashlib
+from datetime import datetime, timezone
 from uuid import UUID
 from app.models.task import Task, IdempotencyRecord
 from sqlalchemy import select, func
@@ -131,4 +132,67 @@ class TaskService:
                 )
 
             return task, False
-        
+
+    async def cancel_task(self, task_id: UUID) -> Task | None:
+        async with self.db.begin():
+            task = await self.db.scalar(
+                select(Task).where(
+                    Task.id == task_id
+                ).with_for_update()
+            )
+
+            if task is None:
+                return None
+
+            if task.status in (TaskStatus.SUCCEEDED, TaskStatus.CANCELLED, TaskStatus.FAILED):
+                raise ValueError(f"Cannot cancel task with status {task.status.value}")
+
+            if task.status is TaskStatus.RUNNING:
+                """
+                TODO -> Implement a worked-cordinated cancellation for running tasks
+                """
+                raise ValueError(f"Cannot cancel a running task yet; worker-cordinated cancellation not implemented")
+
+            now = datetime.now(timezone.utc)
+
+            task.status = TaskStatus.CANCELLED
+            task.completed_at = now
+            task.locked_by = None
+            task.locked_until = None
+            task.lease_token = None
+
+        return task
+
+
+    async def retry_task(self, task_id: UUID) -> Task | None:
+
+        async with self.db.begin():
+            task = await self.db.scalar(
+                select(Task).where(
+                    Task.id == task_id
+                ).with_for_update()
+            )
+
+            if task is None:
+                return None
+
+
+            if task.status != TaskStatus.FAILED:
+                raise ValueError(f"Only Failed tasks can be retried")
+
+            now = datetime.now(timezone.utc)
+
+            # Extend attempt by one more execution
+            task.max_attempts +=1
+            task.status = TaskStatus.RETRYING
+            task.scheduled_at = now
+
+            task.result = None
+            task.completed_at = None
+            task.last_error = None
+
+            task.lease_token = None
+            task.locked_until = None
+            task.locked_by = None
+
+        return task

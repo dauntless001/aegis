@@ -121,3 +121,57 @@ async def create_task(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unexpected error while submitting task"
         )
+
+
+@router.get(
+    "/{task_id}/cancel",
+    response_model=TaskResponse
+)
+async def cancel_task(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_database)
+):
+    service  = TaskService(db=db)
+
+    try:
+        task = await service.cancel_task(task_id=task_id)
+    except ValueError as exec:
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            details=str(exec)
+        )
+
+    if task is None:
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            details="Task not found"
+        )
+
+    return task
+
+
+@router.get(
+    "/{task_id}/retry",
+    response_model=TaskResponse
+)
+async def cancel_task(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_database)
+):
+    service  = TaskService(db=db)
+
+    try:
+        task = await service.retry_task(task_id=task_id)
+    except ValueError as exec:
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            details=str(exec)
+        )
+
+    if task is None:
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            details="Task not found"
+        )
+
+    return task
